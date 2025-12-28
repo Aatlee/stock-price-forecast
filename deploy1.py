@@ -1,14 +1,9 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[1]:
-
-
 import streamlit as st
 import pandas as pd
 import numpy as np
 import pickle
 import matplotlib.pyplot as plt
+import os
 
 # ------------------ PAGE CONFIG ------------------
 st.set_page_config(
@@ -52,10 +47,14 @@ st.sidebar.info(
     "📌 **Target**: Log return"
 )
 
-# ------------------ LOAD MODEL ------------------
+# ------------------ LOAD MODEL (CLOUD SAFE) ------------------
 @st.cache_resource
 def load_model():
-    with open("xgb_model.pkl", "rb") as f:
+    model_path = os.path.join(os.path.dirname(__file__), "xgb_model.pkl")
+    if not os.path.exists(model_path):
+        st.error("❌ Model file 'xgb_model.pkl' not found in repository.")
+        st.stop()
+    with open(model_path, "rb") as f:
         return pickle.load(f)
 
 model = load_model()
@@ -68,21 +67,26 @@ if uploaded_file is None:
 # ------------------ DATA LOADING ------------------
 df = pd.read_csv(uploaded_file)
 
-df["Date"] = pd.to_datetime(df["Date"], dayfirst=True)
+# Safe date parsing
+df["Date"] = pd.to_datetime(df["Date"], dayfirst=True, errors="coerce")
+df.dropna(subset=["Date"], inplace=True)
+
 df.set_index("Date", inplace=True)
 df = df[["Adj Close"]].rename(columns={"Adj Close": "Adj_Close"})
 
+# ------------------ RETURNS ------------------
 df["log_return"] = np.log(df["Adj_Close"] / df["Adj_Close"].shift(1))
 df.dropna(inplace=True)
 
 # ------------------ FEATURE ENGINEERING ------------------
-def create_features(df, lags=10):
-    data = df.copy()
+def create_features(data, lags=10):
+    df_feat = data.copy()
     for lag in range(1, lags + 1):
-        data[f"ret_lag_{lag}"] = data["log_return"].shift(lag)
-    data["rolling_mean_5"] = data["log_return"].rolling(5).mean()
-    data["rolling_std_5"] = data["log_return"].rolling(5).std()
-    return data
+        df_feat[f"ret_lag_{lag}"] = df_feat["log_return"].shift(lag)
+
+    df_feat["rolling_mean_5"] = df_feat["log_return"].rolling(5).mean()
+    df_feat["rolling_std_5"] = df_feat["log_return"].rolling(5).std()
+    return df_feat
 
 df_feat = create_features(df).dropna()
 
@@ -93,21 +97,27 @@ future_prices = []
 
 for _ in range(forecast_days):
     X_last = last_row.drop(["Adj_Close", "log_return"], axis=1)
-    r = model.predict(X_last)[0]
+    pred_return = model.predict(X_last)[0]
 
-    last_price *= np.exp(r)
+    last_price *= np.exp(pred_return)
     future_prices.append(last_price)
 
     for lag in range(10, 1, -1):
-        last_row[f"ret_lag_{lag}"] = last_row[f"ret_lag_{lag-1}"]
-    last_row["ret_lag_1"] = r
+        last_row[f"ret_lag_{lag}"] = last_row[f"ret_lag_{lag - 1}"]
 
-    recent = last_row[[f"ret_lag_{i}" for i in range(1, 6)]].values.flatten()
-    last_row["rolling_mean_5"] = recent.mean()
-    last_row["rolling_std_5"] = recent.std()
-    last_row["log_return"] = r
+    last_row["ret_lag_1"] = pred_return
 
-future_dates = pd.bdate_range(df.index[-1], periods=forecast_days + 1)[1:]
+    recent_returns = last_row[[f"ret_lag_{i}" for i in range(1, 6)]].values.flatten()
+    last_row["rolling_mean_5"] = recent_returns.mean()
+    last_row["rolling_std_5"] = recent_returns.std()
+    last_row["log_return"] = pred_return
+
+# ------------------ FUTURE DATES ------------------
+future_dates = pd.bdate_range(
+    start=df.index[-1],
+    periods=forecast_days + 1
+)[1:]
+
 forecast_df = pd.DataFrame(
     {"Forecast_Price": future_prices},
     index=future_dates
@@ -129,8 +139,8 @@ col2.metric(
 )
 
 pct_change = (
-    (forecast_df['Forecast_Price'].iloc[-1] - df['Adj_Close'].iloc[-1])
-    / df['Adj_Close'].iloc[-1] * 100
+    (forecast_df["Forecast_Price"].iloc[-1] - df["Adj_Close"].iloc[-1])
+    / df["Adj_Close"].iloc[-1] * 100
 )
 
 col3.metric(
@@ -174,10 +184,3 @@ st.markdown(
     "</p>",
     unsafe_allow_html=True
 )
-
-
-# In[ ]:
-
-
-
-
