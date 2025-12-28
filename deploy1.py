@@ -1,23 +1,18 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[1]:
-
-
 import streamlit as st
 import pandas as pd
 import numpy as np
 import pickle
 import matplotlib.pyplot as plt
+import os
 
-# ------------------ PAGE CONFIG ------------------
+# ================== PAGE CONFIG ==================
 st.set_page_config(
     page_title="Stock Price Forecast",
     page_icon="📈",
     layout="wide"
 )
 
-# ------------------ HEADER ------------------
+# ================== HEADER ==================
 st.markdown(
     """
     <h1 style='text-align: center;'>📊 Stock Price Forecasting Dashboard</h1>
@@ -28,7 +23,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# ------------------ SIDEBAR ------------------
+# ================== SIDEBAR ==================
 st.sidebar.markdown("## ⚙️ Controls")
 st.sidebar.markdown("Upload historical stock data to generate forecasts.")
 
@@ -52,97 +47,114 @@ st.sidebar.info(
     "📌 **Target**: Log return"
 )
 
-# ------------------ LOAD MODEL ------------------
+# ================== LOAD MODEL (CLOUD SAFE) ==================
 @st.cache_resource
 def load_model():
-    with open("xgb_model.pkl", "rb") as f:
+    base_dir = os.path.dirname(__file__)
+    model_path = os.path.join(base_dir, "xgb_model.pkl")
+
+    if not os.path.exists(model_path):
+        st.error("❌ xgb_model.pkl not found. Upload it to GitHub and redeploy.")
+        st.stop()
+
+    with open(model_path, "rb") as f:
         return pickle.load(f)
 
 model = load_model()
 
-# ------------------ NO FILE GUARD ------------------
+# ================== NO FILE GUARD ==================
 if uploaded_file is None:
     st.warning("⬅️ Please upload a CSV file from the sidebar to continue.")
     st.stop()
 
-# ------------------ DATA LOADING ------------------
+# ================== DATA LOADING ==================
 df = pd.read_csv(uploaded_file)
 
-df["Date"] = pd.to_datetime(df["Date"], dayfirst=True)
+df["Date"] = pd.to_datetime(df["Date"], dayfirst=True, errors="coerce")
+df.dropna(subset=["Date"], inplace=True)
+
 df.set_index("Date", inplace=True)
 df = df[["Adj Close"]].rename(columns={"Adj Close": "Adj_Close"})
 
+# ================== RETURNS ==================
 df["log_return"] = np.log(df["Adj_Close"] / df["Adj_Close"].shift(1))
 df.dropna(inplace=True)
 
-# ------------------ FEATURE ENGINEERING ------------------
-def create_features(df, lags=10):
-    data = df.copy()
+# ================== FEATURE ENGINEERING ==================
+def create_features(data, lags=10):
+    feat = data.copy()
     for lag in range(1, lags + 1):
-        data[f"ret_lag_{lag}"] = data["log_return"].shift(lag)
-    data["rolling_mean_5"] = data["log_return"].rolling(5).mean()
-    data["rolling_std_5"] = data["log_return"].rolling(5).std()
-    return data
+        feat[f"ret_lag_{lag}"] = feat["log_return"].shift(lag)
+
+    feat["rolling_mean_5"] = feat["log_return"].rolling(5).mean()
+    feat["rolling_std_5"] = feat["log_return"].rolling(5).std()
+    return feat
 
 df_feat = create_features(df).dropna()
 
-# ------------------ FORECASTING ------------------
+# ================== FORECASTING ==================
 last_row = df_feat.iloc[-1:].copy()
 last_price = df["Adj_Close"].iloc[-1]
 future_prices = []
 
 for _ in range(forecast_days):
     X_last = last_row.drop(["Adj_Close", "log_return"], axis=1)
-    r = model.predict(X_last)[0]
+    pred_return = model.predict(X_last)[0]
 
-    last_price *= np.exp(r)
+    last_price *= np.exp(pred_return)
     future_prices.append(last_price)
 
     for lag in range(10, 1, -1):
-        last_row[f"ret_lag_{lag}"] = last_row[f"ret_lag_{lag-1}"]
-    last_row["ret_lag_1"] = r
+        last_row[f"ret_lag_{lag}"] = last_row[f"ret_lag_{lag - 1}"]
+
+    last_row["ret_lag_1"] = pred_return
 
     recent = last_row[[f"ret_lag_{i}" for i in range(1, 6)]].values.flatten()
     last_row["rolling_mean_5"] = recent.mean()
     last_row["rolling_std_5"] = recent.std()
-    last_row["log_return"] = r
+    last_row["log_return"] = pred_return
 
-future_dates = pd.bdate_range(df.index[-1], periods=forecast_days + 1)[1:]
+# ================== FUTURE DATES ==================
+future_dates = pd.bdate_range(
+    start=df.index[-1],
+    periods=forecast_days + 1
+)[1:]
+
 forecast_df = pd.DataFrame(
     {"Forecast_Price": future_prices},
     index=future_dates
 )
 
-# ------------------ METRICS ------------------
+# ================== METRICS ==================
 st.markdown("## 📌 Key Metrics")
 
-col1, col2, col3 = st.columns(3)
+c1, c2, c3 = st.columns(3)
 
-col1.metric(
+c1.metric(
     "Last Closing Price",
     f"{df['Adj_Close'].iloc[-1]:.2f}"
 )
 
-col2.metric(
+c2.metric(
     "Final Forecast Price",
     f"{forecast_df['Forecast_Price'].iloc[-1]:.2f}"
 )
 
 pct_change = (
-    (forecast_df['Forecast_Price'].iloc[-1] - df['Adj_Close'].iloc[-1])
-    / df['Adj_Close'].iloc[-1] * 100
+    (forecast_df["Forecast_Price"].iloc[-1] - df["Adj_Close"].iloc[-1])
+    / df["Adj_Close"].iloc[-1] * 100
 )
 
-col3.metric(
+c3.metric(
     "Expected Change",
     f"{pct_change:.2f} %",
     delta=f"{pct_change:.2f} %"
 )
 
-# ------------------ TABS ------------------
+# ================== TABS ==================
 tab1, tab2 = st.tabs(["📈 Forecast Chart", "📋 Forecast Table"])
 
-# ------------------ PLOT ------------------
+# ================== PLOT ==================
 with tab1:
     fig, ax = plt.subplots(figsize=(14, 6))
     ax.plot(df["Adj_Close"].iloc[-120:], label="Historical Price")
@@ -152,21 +164,21 @@ with tab1:
         linestyle="--",
         label="Forecast"
     )
-    ax.set_title("Stock Price Forecast", fontsize=16)
+    ax.set_title("Stock Price Forecast")
     ax.set_xlabel("Date")
     ax.set_ylabel("Price")
-    ax.grid(True, alpha=0.3)
+    ax.grid(alpha=0.3)
     ax.legend()
     st.pyplot(fig)
 
-# ------------------ TABLE ------------------
+# ================== TABLE ==================
 with tab2:
     st.dataframe(
         forecast_df.style.format("{:.2f}"),
         use_container_width=True
     )
 
-# ------------------ FOOTER ------------------
+# ================== FOOTER ==================
 st.markdown("---")
 st.markdown(
     "<p style='text-align: center; color: grey;'>"
@@ -174,10 +186,3 @@ st.markdown(
     "</p>",
     unsafe_allow_html=True
 )
-
-
-# In[ ]:
-
-
-
-
