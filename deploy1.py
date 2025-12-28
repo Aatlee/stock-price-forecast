@@ -4,6 +4,7 @@ import numpy as np
 import pickle
 import matplotlib.pyplot as plt
 import os
+from sklearn.metrics import mean_squared_error, mean_absolute_error
 
 # ================== PAGE CONFIG ==================
 st.set_page_config(
@@ -92,6 +93,34 @@ def create_features(data, lags=10):
 
 df_feat = create_features(df).dropna()
 
+# ================== MODEL ACCURACY (XGBOOST) ==================
+split = int(len(df_feat) * 0.8)
+
+X_all = df_feat.drop(["Adj_Close", "log_return"], axis=1)
+y_all = df_feat["log_return"]
+
+X_test = X_all.iloc[split:]
+y_test = y_all.iloc[split:]
+
+y_pred = model.predict(X_test)
+
+rmse_ret = np.sqrt(mean_squared_error(y_test, y_pred))
+mae_ret = mean_absolute_error(y_test, y_pred)
+
+actual_price = df_feat["Adj_Close"].iloc[-len(y_test):].values
+pred_price = actual_price[0] * np.exp(np.cumsum(y_pred))
+
+rmse_price = np.sqrt(mean_squared_error(actual_price, pred_price))
+mae_price = mean_absolute_error(actual_price, pred_price)
+
+st.markdown("## 🎯 Model Accuracy (XGBoost)")
+
+a1, a2, a3, a4 = st.columns(4)
+a1.metric("RMSE (Returns)", f"{rmse_ret:.6f}")
+a2.metric("MAE (Returns)", f"{mae_ret:.6f}")
+a3.metric("RMSE (Price)", f"{rmse_price:.2f}")
+a4.metric("MAE (Price)", f"{mae_price:.2f}")
+
 # ================== FORECASTING ==================
 last_row = df_feat.iloc[-1:].copy()
 last_price = df["Adj_Close"].iloc[-1]
@@ -120,8 +149,13 @@ future_dates = pd.bdate_range(
     periods=forecast_days + 1
 )[1:]
 
+USD_TO_INR = 83
+
 forecast_df = pd.DataFrame(
-    {"Forecast_Price": future_prices},
+    {
+        "Forecast_Price_USD": future_prices,
+        "Forecast_Price_INR": np.array(future_prices) * USD_TO_INR
+    },
     index=future_dates
 )
 
@@ -131,17 +165,17 @@ st.markdown("## 📌 Key Metrics")
 c1, c2, c3 = st.columns(3)
 
 c1.metric(
-    "Last Closing Price",
+    "Last Closing Price (USD)",
     f"{df['Adj_Close'].iloc[-1]:.2f}"
 )
 
 c2.metric(
-    "Final Forecast Price",
-    f"{forecast_df['Forecast_Price'].iloc[-1]:.2f}"
+    "Final Forecast Price (USD)",
+    f"{forecast_df['Forecast_Price_USD'].iloc[-1]:.2f}"
 )
 
 pct_change = (
-    (forecast_df["Forecast_Price"].iloc[-1] - df["Adj_Close"].iloc[-1])
+    (forecast_df["Forecast_Price_USD"].iloc[-1] - df["Adj_Close"].iloc[-1])
     / df["Adj_Close"].iloc[-1] * 100
 )
 
@@ -160,13 +194,13 @@ with tab1:
     ax.plot(df["Adj_Close"].iloc[-120:], label="Historical Price")
     ax.plot(
         forecast_df.index,
-        forecast_df["Forecast_Price"],
+        forecast_df["Forecast_Price_USD"],
         linestyle="--",
-        label="Forecast"
+        label="Forecast (USD)"
     )
     ax.set_title("Stock Price Forecast")
     ax.set_xlabel("Date")
-    ax.set_ylabel("Price")
+    ax.set_ylabel("Price (USD)")
     ax.grid(alpha=0.3)
     ax.legend()
     st.pyplot(fig)
