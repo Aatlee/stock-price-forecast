@@ -76,27 +76,6 @@ df.dropna(subset=["Date"], inplace=True)
 df.set_index("Date", inplace=True)
 df = df[["Adj Close"]].rename(columns={"Adj Close": "Adj_Close"})
 
-# ================== DATASET DESCRIPTION (ADDED) ==================
-st.markdown("## 📊 Dataset Description")
-
-st.info(
-    """
-    **Dataset Type:** Historical Stock Price Data  
-
-    **Required Columns:**
-    - **Date**: Trading date of the stock
-    - **Adj Close**: Adjusted closing price accounting for dividends and splits  
-
-    **Preprocessing Steps:**
-    - Date parsing and indexing
-    - Removal of missing values
-    - Log return calculation for stationarity
-
-    The dataset is used to model short-term market behavior through engineered
-    lag-based and rolling statistical features.
-    """
-)
-
 # ================== RETURNS ==================
 df["log_return"] = np.log(df["Adj_Close"] / df["Adj_Close"].shift(1))
 df.dropna(inplace=True)
@@ -112,25 +91,6 @@ def create_features(data, lags=10):
     return feat
 
 df_feat = create_features(df).dropna()
-
-# ================== MODEL PERFORMANCE (ADDED) ==================
-st.markdown("## 🎯 Model Performance")
-
-st.success(
-    """
-    **Model:** XGBoost Regressor  
-
-    **Training Target:** Log Returns  
-
-    **Evaluation (Offline Training):**
-    - RMSE: ~0.008 – 0.015 (varies by stock)
-    - Directional accuracy higher for short horizons
-    - Captures short-term momentum and volatility patterns  
-
-    ⚠️ Note: Stock prices are inherently volatile.  
-    Predictions are intended for **educational and analytical purposes only**.
-    """
-)
 
 # ================== FORECASTING ==================
 last_row = df_feat.iloc[-1:].copy()
